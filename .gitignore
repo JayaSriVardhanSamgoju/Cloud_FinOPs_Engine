@@ -1,0 +1,88 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Logs
+logs/
+*.log
+airflow/logs/
+
+# Airflow
+airflow/airflow-webserver.pid
+airflow/airflow.cfg
+airflow/airflow.db
+airflow/unittests.cfg
+airflow/webserver_config.py
+
+# Data (Ignore actual data files but keep directory structures via __init__.py)
+data/raw/*
+!data/raw/__init__.py
+data/processed/*
+!data/processed/__init__.py
+data/feature_store/*
+!data/feature_store/__init__.py
+data/validated/*
+!data/validated/__init__.py
+data/drift_reports/*
+!data/drift_reports/__init__.py
+
+*.csv
+*.parquet
+*.h5
+
+# Models & Experiments
+experiments/mlruns/
+experiments/**/*.ckpt
+experiments/**/*.pth
+experiments/**/*.pt
+experiments/**/*.pkl
+experiments/**/*.joblib
+ml/models/**/*.pkl
+ml/models/**/*.h5
+ml/models/**/*.pt
+ml/models/**/*.joblib
+*.pkl
+*.joblib
+
+# Generated Reports
+docs/telemetry_profile_report.md
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
