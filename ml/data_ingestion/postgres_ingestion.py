@@ -2,8 +2,14 @@ import pandas as pd
 from sqlalchemy import text
 from tqdm import tqdm
 
-from configs.db_config import engine
+import sys
+from pathlib import Path
 
+# Add the project root directory to sys.path so 'configs' can be resolved
+project_root = Path(__file__).resolve().parent.parent.parent
+sys.path.append(str(project_root))
+
+from configs.db_config import engine
 
 CSV_PATH = "data/raw/telemetry_data.csv"
 

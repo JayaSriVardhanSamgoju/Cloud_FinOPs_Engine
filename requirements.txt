@@ -1,3 +1,13 @@
 sqlalchemy
 psycopg2-binary
 tqdm
+matplotlib
+seaborn
+plotly
+missingno
+scipy
+pyarrow
+scikit-learn
+xgboost
+lightgbm
+joblib
