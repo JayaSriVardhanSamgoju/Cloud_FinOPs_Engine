@@ -99,15 +99,20 @@ def load_latest_metrics():
 
 
 def load_prediction():
-
-    with open(
-        PREDICTION_PATH,
-        "r"
-    ) as f:
-
-        data = json.load(f)
-
-    return data
+    import requests
+    try:
+        response = requests.get("http://127.0.0.1:8000/predict")
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        st.error(f"Failed to connect to API: {e}")
+        return {
+            "predicted_cpu_30min": 0.0,
+            "recommendation": {
+                "recommendation": "unknown",
+                "reason": "API unreachable"
+            }
+        }
 
 @st.cache_data(ttl=60)
 def load_recent_telemetry():
@@ -178,36 +183,17 @@ def load_workload_analytics():
         engine
     )
 
-def load_recommendation():
-
-    with open(
-        RECOMMENDATION_PATH,
-        "r"
-    ) as f:
-
-        data = json.load(f)
-
-    return data
-
-
-# ============================================================
-# LOAD DATA
-# ============================================================
-
-latest_df = (
-    load_latest_metrics()
-)
-
 prediction = (
     load_prediction()
 )
 
-recommendation = (
-    load_recommendation()
-)
+recommendation = prediction.get("recommendation", {
+    "recommendation": "unknown",
+    "reason": "API unreachable"
+})
 
 latest = (
-    latest_df.iloc[0]
+    load_latest_metrics().iloc[0]
 )
 recent_df = (
     load_recent_telemetry()

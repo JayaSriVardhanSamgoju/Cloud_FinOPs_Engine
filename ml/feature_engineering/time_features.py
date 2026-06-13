@@ -515,57 +515,30 @@ class TimeSeriesFeatureEngineering:
             "Creating target variables..."
         )
 
-        horizons = (
-            self.config
-            .target_horizons
-        )
+        TARGET_SHIFTS = {
+            "target_cpu_30min":          ("cpu_usage", -6),    # 6 * 5min = 30min
+            "target_cpu_1hour":          ("cpu_usage", -12),   # 12 * 5min = 60min
+            "target_request_rate_30min": ("request_rate", -6),
+            "target_latency_30min":      ("response_latency_ms", -6),
+        }
 
-        # CPU Targets
-        df[
-            "target_cpu_30min"
-        ] = (
-            df
-            .groupby("region")
-            ["cpu_usage"]
-            .shift(
-                -horizons["30min"]
-            )
-        )
+        df = df.sort_values(["region", "timestamp"]).reset_index(drop=True)
 
-        df[
-            "target_cpu_1hour"
-        ] = (
-            df
-            .groupby("region")
-            ["cpu_usage"]
-            .shift(
-                -horizons["1hour"]
-            )
-        )
+        for target_col, (source_col, shift_steps) in TARGET_SHIFTS.items():
+            df[target_col] = df.groupby("region")[source_col].shift(shift_steps)
 
-        # Request Rate Target
-        df[
-            "target_request_rate_30min"
-        ] = (
-            df
-            .groupby("region")
-            ["request_rate"]
-            .shift(
-                -horizons["30min"]
-            )
-        )
+        # Drop ALL rows where ANY target is NaN — these are the trailing rows
+        # of each region where no future value exists
+        before_rows = len(df)
+        df = df.dropna(subset=list(TARGET_SHIFTS.keys())).reset_index(drop=True)
+        after_rows = len(df)
 
-        # Latency Target
-        df[
-            "target_latency_30min"
-        ] = (
-            df
-            .groupby("region")
-            ["response_latency_ms"]
-            .shift(
-                -horizons["30min"]
-            )
+        logger.info(
+            f"Target generation | rows_before={before_rows} | rows_after={after_rows} | "
+            f"dropped={before_rows - after_rows} (expected ≈ 12 rows/region × n_regions for the 1hr target)"
         )
+        
+        self.validate_target_generation(df)
 
         logger.info(
             "Target variables created."
@@ -629,6 +602,54 @@ class TimeSeriesFeatureEngineering:
         logger.info(
             "Validation completed."
         )
+
+    def validate_target_generation(self, df: pd.DataFrame) -> None:
+        """Confirms no cross-region leakage in target columns."""
+        for region in df["region"].unique():
+            sub = df[df["region"] == region].sort_values("timestamp")
+            # Spot-check: target_cpu_30min at row i should equal cpu_usage at row i+6
+            # within the SAME region only
+            shifted = sub["cpu_usage"].shift(-6)
+            
+            # Because df already had trailing NaNs dropped for the 1-hour target,
+            # shifted will have 6 NaNs at the end that we must exclude from the comparison.
+            n_valid = len(shifted.dropna())
+            
+            match = np.allclose(
+                sub["target_cpu_30min"].values[:n_valid],
+                shifted.values[:n_valid],
+                atol=1e-6
+            )
+            assert match, f"Target leakage detected in region {region}"
+
+        # Confirm no NaNs remain in target columns
+        target_cols = [c for c in df.columns if c.startswith("target_")]
+        assert df[target_cols].isnull().sum().sum() == 0, "NaNs remain in target columns"
+
+        logger.info("Target generation validation passed | no cross-region leakage | no NaN targets")
+
+    def prune_correlated_features(self, df: pd.DataFrame, threshold: float = 0.95) -> pd.DataFrame:
+        """Removes features with correlation > threshold, excluding targets and base columns."""
+        logger.info("Pruning highly correlated features...")
+        
+        # Identify features (exclude targets, base metrics, categorical)
+        exclude_cols = ['timestamp', 'region', 'workload_type', 'instance_type', 'special_event',
+                        'is_anomaly', 'is_rerouted_traffic', 'target_cpu_30min', 'target_cpu_1hour', 
+                        'target_request_rate_30min', 'target_latency_30min',
+                        'cpu_usage', 'ram_usage', 'request_rate', 'response_latency_ms',
+                        'network_in', 'network_out', 'disk_io', 'error_rate', 
+                        'resource_pressure_score', 'sla_breach_risk']
+                        
+        feature_cols = [c for c in df.columns if c not in exclude_cols and np.issubdtype(df[c].dtype, np.number)]
+        
+        corr_matrix = df[feature_cols].corr().abs()
+        upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+        
+        to_drop = [column for column in upper.columns if any(upper[column] > threshold)]
+        
+        df = df.drop(columns=to_drop)
+        logger.info(f"Pruned {len(to_drop)} highly correlated features. Remaining features: {df.shape[1]}")
+        return df
 
 
     # ========================================================
@@ -888,6 +909,8 @@ if __name__ == "__main__":
         pipeline
         .create_target_variables(df)
     )
+
+    df = pipeline.prune_correlated_features(df, threshold=0.95)
 
     pipeline.validate_features(df)
 

@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudpulse-redis
+  namespace: cloudpulse
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cloudpulse-redis
+  template:
+    metadata:
+      labels:
+        app: cloudpulse-redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        ports:
+        - containerPort: 6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudpulse-redis
+  namespace: cloudpulse
+spec:
+  ports:
+  - port: 6379
+  selector:
+    app: cloudpulse-redis

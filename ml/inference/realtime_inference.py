@@ -42,7 +42,7 @@ class InferenceConfig:
     )
 
     feature_table: str = (
-        "telemetry_features"
+        "telemetry_metrics"
     )
 
     output_dir: str = (
@@ -113,22 +113,42 @@ class RealtimeInferencePipeline:
         return model
 
 
-    # ========================================================
-    # LOAD LATEST FEATURES
-    # ========================================================
+    def load_latest_features(
+        self,
+        region: str = None,
+    ):
+        """
+        S6 Fix: Load enough telemetry history to compute all rolling/lag
+        features, instead of fetching a single row.
 
-    def load_latest_features(self):
+        Fetches LOOKBACK_MINUTES of history for the specified region
+        (or all regions if not specified) and recomputes features using
+        the SAME shared function used in training.
+        """
+        from ml.features.shared_feature_logic import (
+            compute_features,
+            LOOKBACK_MINUTES,
+        )
 
         logger.info(
-            "Loading latest telemetry "
-            "features..."
+            f"Loading {LOOKBACK_MINUTES}min of telemetry history "
+            f"for feature computation..."
         )
+
+        # Build region filter if specified
+        region_filter = ""
+        if region and region.lower() != "all":
+            region_filter = f"AND region = '{region}'"
 
         query = f"""
         SELECT *
         FROM {self.config.feature_table}
-        ORDER BY timestamp DESC
-        LIMIT 1
+        WHERE timestamp >= (
+            SELECT MAX(timestamp) - INTERVAL '{LOOKBACK_MINUTES} minutes'
+            FROM {self.config.feature_table}
+        )
+        {region_filter}
+        ORDER BY timestamp ASC
         """
 
         df = pd.read_sql(
@@ -136,11 +156,33 @@ class RealtimeInferencePipeline:
             engine
         )
 
+        if df.empty:
+            logger.error("No telemetry data found in lookback window")
+            raise ValueError("Empty telemetry lookback window")
+
         logger.info(
-            "Latest telemetry row loaded."
+            f"Loaded {len(df)} rows of telemetry history "
+            f"(covering {LOOKBACK_MINUTES}min lookback)"
         )
 
-        return df
+        # Recompute features using THE SAME function used in training
+        # region_grouped=False since we're operating on a single region
+        is_single_region = df["region"].nunique() == 1
+        features_df = compute_features(
+            df,
+            region_grouped=not is_single_region,
+        )
+
+        # Return only the most recent row's features for prediction,
+        # but keep full df for context in scaling recommendation
+        latest_row = features_df.iloc[[-1]]
+
+        logger.info(
+            f"Features recomputed | latest timestamp: "
+            f"{latest_row['timestamp'].iloc[0]}"
+        )
+
+        return latest_row
 
 
     # ========================================================
@@ -299,7 +341,7 @@ class RealtimeInferencePipeline:
         cost = (
             latest_df[
                 "cost_per_hour"
-            ].iloc[0]
+            ].iloc[0] if "cost_per_hour" in latest_df.columns else 0.0
         )
 
         recommendation = {}

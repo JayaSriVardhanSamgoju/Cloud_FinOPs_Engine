@@ -13,3 +13,12 @@ lightgbm
 joblib
 tabulate
 streamlit
+streamlit-autorefresh
+pandas
+numpy
+fastapi
+uvicorn[standard]
+redis
+slowapi
+requests
+pydantic

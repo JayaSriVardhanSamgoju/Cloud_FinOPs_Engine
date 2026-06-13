@@ -14,6 +14,8 @@ Features:
 """
 import matplotlib.pyplot as plt
 import joblib
+import mlflow
+import mlflow.sklearn
 
 from sklearn.linear_model import (
     LinearRegression
@@ -160,6 +162,8 @@ class ForecastingPipeline:
             f"{df.shape}"
         )
 
+        df = df.reset_index(drop=True)
+
         return df
 
 
@@ -233,10 +237,11 @@ class ForecastingPipeline:
     # TIME SERIES SPLIT
     # ========================================================
 
-    def chronological_split(
+    def chronological_split_per_region(
         self,
         X,
-        y
+        y,
+        original_df
     ):
 
         logger.info(
@@ -244,52 +249,21 @@ class ForecastingPipeline:
             "train/validation/test split..."
         )
 
-        total_rows = len(X)
-
-        train_end = int(
-            total_rows
-            * self.config.train_size
-        )
-
-        val_end = int(
-            total_rows
-            * (
-                self.config.train_size
-                +
-                self.config.validation_size
-            )
-        )
-
-        # Train
-        X_train = (
-            X.iloc[:train_end]
-        )
-
-        y_train = (
-            y.iloc[:train_end]
-        )
-
-        # Validation
-        X_val = (
-            X.iloc[
-                train_end:val_end
-            ]
-        )
-
-        y_val = (
-            y.iloc[
-                train_end:val_end
-            ]
-        )
-
-        # Test
-        X_test = (
-            X.iloc[val_end:]
-        )
-
-        y_test = (
-            y.iloc[val_end:]
-        )
+        train_idx, val_idx, test_idx = [], [], []
+        
+        for region in original_df["region"].unique():
+            reg_indices = original_df[original_df["region"] == region].index.values
+            total_rows = len(reg_indices)
+            train_end = int(total_rows * self.config.train_size)
+            val_end = int(total_rows * (self.config.train_size + self.config.validation_size))
+            
+            train_idx.extend(reg_indices[:train_end])
+            val_idx.extend(reg_indices[train_end:val_end])
+            test_idx.extend(reg_indices[val_end:])
+            
+        X_train, y_train = X.iloc[train_idx], y.iloc[train_idx]
+        X_val, y_val = X.iloc[val_idx], y.iloc[val_idx]
+        X_test, y_test = X.iloc[test_idx], y.iloc[test_idx]
 
         logger.info(
             f"Train Shape: "
@@ -314,7 +288,179 @@ class ForecastingPipeline:
             y_val,
             y_test
         )
-        # ========================================================
+
+    # ========================================================
+    # MLFLOW PIPELINE (Fix 2 + Fix 5 + S5)
+    # ========================================================
+
+    def run_mlflow_pipeline(self, X_train, X_val, X_test, y_train, y_val, y_test):
+        """
+        Unified training + evaluation pipeline with:
+        - Persistence baseline (Fix 2)
+        - Full MLflow experiment tracking (Fix 5)
+        - Pressure-score ablation study (S5)
+        """
+        mlflow.set_tracking_uri(
+            os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5001")
+        )
+        mlflow.set_experiment("cloudpulse-cpu-forecasting")
+        results = []
+
+        # ── 1. Persistence Baseline (Fix 2) ────────────────────────
+        # Naive baseline: predicts target = current cpu_usage value
+        baseline_preds = X_val["cpu_usage"].values
+        baseline_rmse = np.sqrt(mean_squared_error(y_val, baseline_preds))
+        baseline_mae = mean_absolute_error(y_val, baseline_preds)
+        baseline_r2 = r2_score(y_val, baseline_preds)
+
+        results.append({
+            "model": "PersistenceBaseline",
+            "rmse": round(baseline_rmse, 4),
+            "mae": round(baseline_mae, 4),
+            "r2_score": round(baseline_r2, 4),
+            "improvement_pct": 0.0,
+        })
+        logger.info(
+            f"PersistenceBaseline | RMSE: {baseline_rmse:.4f} "
+            f"| MAE: {baseline_mae:.4f} | R²: {baseline_r2:.4f}"
+        )
+
+        # ── 2. ML Models ───────────────────────────────────────────
+        models = {
+            "linear_regression": LinearRegression(),
+            "random_forest": RandomForestRegressor(
+                n_estimators=100, max_depth=12,
+                random_state=self.config.random_seed, n_jobs=-1
+            ),
+            "xgboost": XGBRegressor(
+                n_estimators=200, learning_rate=0.05, max_depth=8,
+                subsample=0.8, colsample_bytree=0.8,
+                random_state=self.config.random_seed, n_jobs=-1
+            ),
+            "lightgbm": LGBMRegressor(
+                n_estimators=200, learning_rate=0.05, max_depth=8,
+                random_state=self.config.random_seed
+            ),
+            # S5: Ablation study — same model but without pressure/SLA features
+            "lightgbm_no_pressure": LGBMRegressor(
+                n_estimators=200, learning_rate=0.05, max_depth=8,
+                random_state=self.config.random_seed
+            ),
+        }
+
+        target_col = self.config.target_column
+
+        for name, model in models.items():
+            with mlflow.start_run(run_name=f"{name}_{target_col}"):
+                logger.info(f"Training {name}...")
+
+                # S5: Drop pressure/SLA features for ablation variant
+                if name == "lightgbm_no_pressure":
+                    drop_cols = ["resource_pressure_score", "sla_breach_risk"]
+                    X_tr = X_train.drop(columns=[c for c in drop_cols if c in X_train.columns])
+                    X_v = X_val.drop(columns=[c for c in drop_cols if c in X_val.columns])
+                    X_te = X_test.drop(columns=[c for c in drop_cols if c in X_test.columns])
+                else:
+                    X_tr, X_v, X_te = X_train, X_val, X_test
+
+                # ── Log params (Fix 5 audit requirement) ───────────
+                mlflow.log_param("model_type", name)
+                mlflow.log_param("target", target_col)
+                mlflow.log_param("n_features", X_tr.shape[1])
+                mlflow.log_param("train_rows", len(X_tr))
+                mlflow.log_param("test_rows", len(X_te))
+                mlflow.log_param("random_seed", self.config.random_seed)
+
+                model.fit(X_tr, y_train)
+                preds = model.predict(X_v)
+
+                rmse = np.sqrt(mean_squared_error(y_val, preds))
+                mae = mean_absolute_error(y_val, preds)
+                r2 = r2_score(y_val, preds)
+                improvement_pct = (
+                    (baseline_rmse - rmse) / baseline_rmse * 100
+                )
+
+                # ── Log metrics (Fix 5 audit requirement) ──────────
+                mlflow.log_metric("rmse", rmse)
+                mlflow.log_metric("mae", mae)
+                mlflow.log_metric("r2", r2)
+                mlflow.log_metric("baseline_rmse", baseline_rmse)
+                mlflow.log_metric("improvement_pct", improvement_pct)
+
+                results.append({
+                    "model": name,
+                    "rmse": round(rmse, 4),
+                    "mae": round(mae, 4),
+                    "r2_score": round(r2, 4),
+                    "improvement_pct": round(improvement_pct, 2),
+                })
+
+                logger.info(
+                    f"{name} vs PersistenceBaseline | target={target_col} | "
+                    f"RMSE improvement={improvement_pct:.2f}%"
+                )
+
+                # Fix 2: Warn if model barely beats persistence
+                if improvement_pct < 5.0:
+                    logger.warning(
+                        f"{name} provides negligible improvement over persistence "
+                        f"for {target_col}. Consider whether this target is "
+                        f"forecastable at 30-min horizon, or whether the model "
+                        f"is just learning persistence via resource_pressure_score "
+                        f"(see Fix 5/S5)."
+                    )
+
+                # ── Feature importance + S5 dominance check ────────
+                if hasattr(model, "feature_importances_"):
+                    importance_df = pd.DataFrame({
+                        "feature": X_tr.columns,
+                        "importance": model.feature_importances_
+                    }).sort_values("importance", ascending=False)
+
+                    importance_path = f"artifacts/models/{name}_feature_importance.csv"
+                    importance_df.to_csv(importance_path, index=False)
+                    mlflow.log_artifact(importance_path)
+
+                    # S5: Pressure score dominance check
+                    top_feature = importance_df.iloc[0]
+                    if (
+                        top_feature["feature"] == "resource_pressure_score"
+                        and top_feature["importance"] > 0.5
+                    ):
+                        logger.warning(
+                            f"resource_pressure_score accounts for "
+                            f"{top_feature['importance']:.1%} of importance "
+                            f"for {target_col}. Consider re-running without "
+                            f"this feature to check if model performance is "
+                            f"meaningfully different from persistence-equivalent "
+                            f"behavior."
+                        )
+
+                # ── Log model to MLflow registry (Fix 5) ───────────
+                try:
+                    mlflow.sklearn.log_model(
+                        model,
+                        artifact_path="model",
+                        registered_model_name=f"cloudpulse-{name}-{target_col}",
+                    )
+                except Exception as e:
+                    # Model registry may not be available (e.g., no backend store)
+                    # Fall back to logging without registration
+                    logger.warning(f"Model registry unavailable, logging without registration: {e}")
+                    mlflow.sklearn.log_model(model, artifact_path="model")
+
+                logger.info(
+                    f"MLflow run logged | model={name} | target={target_col} "
+                    f"| run_id={mlflow.active_run().info.run_id}"
+                )
+
+        results_df = pd.DataFrame(results)
+        logger.info(f"\n{results_df.sort_values('rmse').to_string(index=False)}")
+        return results_df
+
+
+    # ========================================================
     # TRAIN MODELS
     # ========================================================
 
@@ -501,8 +647,11 @@ class ForecastingPipeline:
             "model_comparison.md"
         )
 
+        # Exclude baseline from "best model" selection
+        ml_models = results_df[results_df["model"] != "PersistenceBaseline"]
+
         best_model = (
-            results_df
+            ml_models
             .sort_values(
                 "r2_score",
                 ascending=False
@@ -522,11 +671,12 @@ class ForecastingPipeline:
             )
 
             f.write(
-                "## Model Metrics\n\n"
+                "## All Results (including Persistence Baseline)\n\n"
             )
 
             f.write(
                 results_df
+                .sort_values("rmse")
                 .to_markdown(
                     index=False
                 )
@@ -535,22 +685,40 @@ class ForecastingPipeline:
             f.write("\n\n")
 
             f.write(
-                "## Best Model\n\n"
+                "## Best ML Model\n\n"
             )
 
             f.write(
-                f"Best Model: "
+                f"**Best Model:** "
                 f"{best_model['model']}\n\n"
             )
 
             f.write(
-                f"R² Score: "
-                f"{best_model['r2_score']:.4f}"
+                f"**R² Score:** "
+                f"{best_model['r2_score']:.4f}\n\n"
             )
 
+            if "improvement_pct" in best_model.index:
+                f.write(
+                    f"**RMSE Improvement vs Persistence:** "
+                    f"{best_model['improvement_pct']:.2f}%\n\n"
+                )
+
+            # Note about ablation study
+            ablation = results_df[results_df["model"] == "lightgbm_no_pressure"]
+            if not ablation.empty:
+                f.write("## S5 Ablation Study\n\n")
+                f.write(
+                    "LightGBM trained without `resource_pressure_score` and "
+                    "`sla_breach_risk` features:\n\n"
+                )
+                f.write(ablation.to_markdown(index=False))
+                f.write("\n")
+
         logger.info(
-            "Report saved."
+            f"Report saved to {report_path}"
         )
+
         # ========================================================
     # TEST SET EVALUATION
     # ========================================================
@@ -832,66 +1000,18 @@ if __name__ == "__main__":
         y_test
     ) = (
         pipeline
-        .chronological_split(
+        .chronological_split_per_region(
             X,
-            y
+            y,
+            df
         )
     )
 
-    models = (
-        pipeline
-        .train_models(
-            X_train,
-            y_train
-        )
+    results_df = pipeline.run_mlflow_pipeline(
+        X_train, X_val, X_test,
+        y_train, y_val, y_test
     )
-
-    results_df = (
-        pipeline
-        .evaluate_models(
-            models,
-            X_val,
-            y_val
-        )
-    )
-
-    pipeline.save_models(
-        models
-    )
-
-    pipeline.save_report(
-        results_df
-    )
-
-    (
-        best_model_name,
-        best_model,
-        predictions
-    ) = (
-        pipeline
-        .evaluate_best_model(
-            models,
-            results_df,
-            X_test,
-            y_test
-        )
-    )
-
-    pipeline.generate_feature_importance(
-        best_model,
-        X_train,
-        best_model_name
-    )
-
-    pipeline.visualize_predictions(
-        y_test,
-        predictions
-    )
-
-    pipeline.save_best_model(
-        best_model,
-        best_model_name
-    )
+    pipeline.save_report(results_df)
 
     logger.info(
         "\nStep 11 "

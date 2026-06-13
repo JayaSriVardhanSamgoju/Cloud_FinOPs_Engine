@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: cloudpulse-postgres
+  namespace: cloudpulse
+spec:
+  serviceName: cloudpulse-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cloudpulse-postgres
+  template:
+    metadata:
+      labels:
+        app: cloudpulse-postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        ports:
+        - containerPort: 5432
+        envFrom:
+        - configMapRef:
+            name: cloudpulse-config
+        env:
+        - name: POSTGRES_USER
+          valueFrom:
+            configMapKeyRef:
+              name: cloudpulse-config
+              key: DB_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            configMapKeyRef:
+              name: cloudpulse-config
+              key: DB_PASSWORD
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: cloudpulse-config
+              key: DB_NAME
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+        # Mount the init script
+        - name: init-script
+          mountPath: /docker-entrypoint-initdb.d/schema.sql
+          subPath: schema.sql
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudpulse-postgres
+  namespace: cloudpulse
+spec:
+  ports:
+  - port: 5432
+  selector:
+    app: cloudpulse-postgres

@@ -1,16 +1,28 @@
 # CloudPulse AI Model Comparison
 
-## Model Metrics
+## All Results (including Persistence Baseline)
 
-| model             |    rmse |     mae |   r2_score |
-|:------------------|--------:|--------:|-----------:|
-| linear_regression | 3.90564 | 3.09838 |   0.971292 |
-| random_forest     | 3.82705 | 3.03543 |   0.972436 |
-| xgboost           | 3.77727 | 3.00621 |   0.973148 |
-| lightgbm          | 3.79628 | 3.02397 |   0.972877 |
+| model                |   rmse |    mae |   r2_score |   improvement_pct |
+|:---------------------|-------:|-------:|-----------:|------------------:|
+| xgboost              | 5.4335 | 4.1717 |     0.9472 |             38.45 |
+| lightgbm             | 5.4471 | 4.197  |     0.9469 |             38.3  |
+| lightgbm_no_pressure | 5.4919 | 4.2217 |     0.9461 |             37.79 |
+| random_forest        | 5.584  | 4.2614 |     0.9442 |             36.74 |
+| linear_regression    | 6.0259 | 4.6864 |     0.9351 |             31.74 |
+| PersistenceBaseline  | 8.8277 | 6.9264 |     0.8606 |              0    |
 
-## Best Model
+## Best ML Model
 
-Best Model: xgboost
+**Best Model:** xgboost
 
-R² Score: 0.9731
+**R² Score:** 0.9472
+
+**RMSE Improvement vs Persistence:** 38.45%
+
+## S5 Ablation Study
+
+LightGBM trained without `resource_pressure_score` and `sla_breach_risk` features:
+
+| model                |   rmse |    mae |   r2_score |   improvement_pct |
+|:---------------------|-------:|-------:|-----------:|------------------:|
+| lightgbm_no_pressure | 5.4919 | 4.2217 |     0.9461 |             37.79 |

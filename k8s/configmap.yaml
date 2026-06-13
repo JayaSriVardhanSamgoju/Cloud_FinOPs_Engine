@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudpulse-config
+  namespace: cloudpulse
+data:
+  DB_USER: user
+  DB_PASSWORD: password
+  DB_HOST: cloudpulse-postgres
+  DB_PORT: "5432"
+  DB_NAME: cloudpulse
+  REDIS_HOST: cloudpulse-redis
+  REDIS_PORT: "6379"
+  MLFLOW_TRACKING_URI: http://cloudpulse-mlflow:5000

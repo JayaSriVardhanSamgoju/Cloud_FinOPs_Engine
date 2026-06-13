@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudpulse-mlflow
+  namespace: cloudpulse
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cloudpulse-mlflow
+  template:
+    metadata:
+      labels:
+        app: cloudpulse-mlflow
+    spec:
+      containers:
+      - name: mlflow
+        image: python:3.11-slim
+        command: ["/bin/sh", "-c"]
+        args:
+          - pip install mlflow psycopg2-binary;
+            mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME} --default-artifact-root /mlflow
+        ports:
+        - containerPort: 5000
+        envFrom:
+        - configMapRef:
+            name: cloudpulse-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudpulse-mlflow
+  namespace: cloudpulse
+spec:
+  ports:
+  - port: 5000
+  selector:
+    app: cloudpulse-mlflow

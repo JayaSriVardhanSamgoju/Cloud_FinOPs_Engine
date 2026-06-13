@@ -2,7 +2,7 @@ import os
 from sqlalchemy import create_engine
 
 DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
-DB_PORT = os.getenv("DB_PORT", "5432")
+DB_PORT = os.getenv("DB_PORT", "5433")
 
 DATABASE_URL = (
     f"postgresql://admin:admin123@{DB_HOST}:{DB_PORT}/cloudpulse_db"

@@ -35,7 +35,7 @@ def truncate_existing_data():
     with engine.connect() as conn:
         conn.execute(
             text(
-                "TRUNCATE TABLE telemetry_metrics RESTART IDENTITY;"
+                "DROP TABLE IF EXISTS telemetry_metrics CASCADE;"
             )
         )
         conn.commit()

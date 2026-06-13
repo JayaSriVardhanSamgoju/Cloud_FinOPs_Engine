@@ -67,3 +67,5 @@ CREATE TABLE drift_reports (
     report_path TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX idx_telemetry_ts_reg ON telemetry_metrics(timestamp, region);
